@@ -1,174 +1,161 @@
-"""Weather App with live OpenWeather API data.
-Run: python weather_app.py
-Requires: pip install -r requirements.txt
-Get an API key from https://openweathermap.org/api and set OPENWEATHER_API_KEY.
-"""
 import os
-import tkinter as tk
-from tkinter import messagebox
 from datetime import datetime
 import requests
+import streamlit as st
 
-API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
 CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather"
 FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
-TIMEOUT_SECONDS = 12
+TIMEOUT = 12
 
+st.set_page_config(page_title="Weatherly — Live Weather", page_icon="🌦️", layout="wide")
+st.markdown("""
+<style>
+.stApp{background:radial-gradient(circle at top right,#193b67 0,#0b1730 40%,#081225 100%);color:#f8fafc}
+[data-testid="stHeader"]{background:transparent}
+.block-container{max-width:1150px;padding-top:2rem;padding-bottom:3rem}
+.hero{padding:1rem 0}.eyebrow{color:#8dbbff;font-size:.8rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+.hero-title{color:#f8fafc;font-size:clamp(2rem,4vw,3.1rem);font-weight:800;line-height:1.1;margin:.35rem 0}
+.hero-sub,.muted{color:#a9bad3}
+.weather-card{border:1px solid #35577e;border-radius:22px;padding:1.4rem 1.5rem;background:linear-gradient(135deg,#1c4577,#0d1f3b);min-height:220px}
+.city{color:#f8fafc;font-size:1.5rem;font-weight:750}.temperature{color:white;font-size:clamp(3.4rem,7vw,5.4rem);font-weight:800;line-height:1.05}
+.condition{color:#dbeafe;font-size:1.1rem;text-transform:capitalize}
+.metric{background:#0f2240;border:1px solid #263f61;padding:1rem;border-radius:16px;min-height:105px}
+.metric-label{color:#9db2cf;font-size:.88rem}.metric-value{color:#f8fafc;font-size:1.4rem;font-weight:750;margin-top:.25rem}
+.section-title{color:#f8fafc;font-size:1.35rem;font-weight:750;margin:1.25rem 0 .7rem}
+.forecast-card{background:#0d1f3b;border:1px solid #263f61;border-radius:17px;padding:1rem .5rem;text-align:center;height:100%}
+.forecast-day{color:#e2e8f0;font-weight:700}.forecast-icon{font-size:2rem;padding:.45rem 0}
+.forecast-temp{color:white;font-size:1.2rem;font-weight:750}.forecast-desc{color:#9db2cf;font-size:.85rem;text-transform:capitalize;min-height:2.3rem}
+div[data-testid="stForm"]{background:#102546;border:1px solid #263f61;padding:1rem;border-radius:18px}
+.footer{color:#8296b4;text-align:center;font-size:.85rem;padding-top:2rem}
+</style>""", unsafe_allow_html=True)
 
-def fetch_weather(city: str, api_key: str = API_KEY) -> dict:
-    """Fetch current weather and 5-day/3-hour forecast for a city."""
-    if not api_key:
-        raise ValueError(
-            "OpenWeather API key is missing. Set OPENWEATHER_API_KEY first. "
-            "See README.md for instructions."
-        )
-    city = city.strip()
-    if not city:
-        raise ValueError("Please enter a city or location.")
-
-    params = {"q": city, "appid": api_key, "units": "metric"}
+def api_key():
     try:
-        current_response = requests.get(CURRENT_URL, params=params, timeout=TIMEOUT_SECONDS)
-        if current_response.status_code == 401:
-            raise ValueError("OpenWeather rejected the API key. Check that it is correct and active.")
-        if current_response.status_code == 404:
-            raise ValueError(f"Location '{city}' was not found. Try a city name such as 'London, UK'.")
-        current_response.raise_for_status()
-        current = current_response.json()
+        secret = st.secrets.get("OPENWEATHER_API_KEY", "")
+    except Exception:
+        secret = ""
+    return str(secret or os.getenv("OPENWEATHER_API_KEY", "")).strip()
 
-        forecast_response = requests.get(FORECAST_URL, params=params, timeout=TIMEOUT_SECONDS)
-        if forecast_response.status_code == 401:
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_weather(city, key):
+    params = {"q": city.strip(), "appid": key, "units": "metric"}
+    try:
+        r = requests.get(CURRENT_URL, params=params, timeout=TIMEOUT)
+        if r.status_code == 401:
             raise ValueError("OpenWeather rejected the API key. Check that it is correct and active.")
-        if forecast_response.status_code == 404:
-            raise ValueError(f"Forecast location '{city}' was not found.")
-        forecast_response.raise_for_status()
-        forecast = forecast_response.json()
+        if r.status_code == 404:
+            raise ValueError(f"Location '{city}' was not found. Try a more specific name, e.g. London, UK.")
+        r.raise_for_status()
+        current = r.json()
+        r = requests.get(FORECAST_URL, params=params, timeout=TIMEOUT)
+        if r.status_code == 401:
+            raise ValueError("OpenWeather rejected the API key. Check that it is correct and active.")
+        r.raise_for_status()
+        return {"current": current, "forecast": r.json()}
     except requests.Timeout as exc:
-        raise RuntimeError("The weather service took too long to respond. Please try again.") from exc
+        raise RuntimeError("The weather service timed out. Please try again.") from exc
     except requests.ConnectionError as exc:
-        raise RuntimeError("Could not connect. Check your internet connection and try again.") from exc
+        raise RuntimeError("Could not connect. Check your internet connection.") from exc
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
-        raise RuntimeError(f"Weather API request failed (HTTP {status}). Please try again later.") from exc
+        raise RuntimeError(f"Weather API request failed (HTTP {status}).") from exc
     except requests.RequestException as exc:
         raise RuntimeError(f"Weather API request failed: {exc}") from exc
 
-    return {"current": current, "forecast": forecast}
+def emoji(description):
+    d = description.lower()
+    if "thunder" in d: return "⛈️"
+    if "snow" in d: return "❄️"
+    if "rain" in d or "drizzle" in d: return "🌧️"
+    if "cloud" in d: return "☁️"
+    if any(x in d for x in ("mist", "fog", "haze")): return "🌫️"
+    if "clear" in d: return "☀️"
+    return "🌤️"
 
-
-def format_results(data: dict) -> tuple[str, str]:
-    current = data["current"]
-    forecast = data["forecast"]
-    name = current.get("name", "Unknown location")
-    country = current.get("sys", {}).get("country", "")
-    main = current.get("main", {})
-    weather = (current.get("weather") or [{}])[0]
-    wind = current.get("wind", {}).get("speed")
-    location_line = f"{name}, {country}" if country else name
-    current_lines = [
-        location_line,
-        f"Temperature: {main.get('temp', 'N/A')} °C (feels like {main.get('feels_like', 'N/A')} °C)",
-        f"Condition: {weather.get('description', 'N/A').capitalize()}",
-        f"Humidity: {main.get('humidity', 'N/A')}%",
-        f"Pressure: {main.get('pressure', 'N/A')} hPa",
-        f"Wind speed: {wind if wind is not None else 'N/A'} m/s",
-    ]
-
-    # OpenWeather's free 5-day forecast returns 3-hour intervals. Show one item
-    # near midday for each date (or the first available item for that date).
-    daily = {}
-    for item in forecast.get("list", []):
+def daily_forecast(data):
+    chosen = {}
+    for item in data.get("list", []):
         stamp = item.get("dt")
-        if not stamp:
-            continue
-        day = datetime.fromtimestamp(stamp).strftime("%a, %d %b")
-        hour = datetime.fromtimestamp(stamp).hour
-        if day not in daily or abs(hour - 12) < abs(daily[day][0] - 12):
-            daily[day] = (hour, item)
+        if not stamp: continue
+        dt = datetime.fromtimestamp(stamp)
+        key = dt.strftime("%Y-%m-%d")
+        if key not in chosen or abs(dt.hour - 12) < abs(chosen[key][0] - 12):
+            chosen[key] = (dt.hour, item)
+    days = []
+    for key, (_, item) in list(chosen.items())[:5]:
+        dt = datetime.strptime(key, "%Y-%m-%d")
+        desc = (item.get("weather") or [{}])[0].get("description", "Unavailable")
+        days.append({"day": dt.strftime("%a"), "date": dt.strftime("%d %b"),
+                     "temp": item.get("main", {}).get("temp"),
+                     "humidity": item.get("main", {}).get("humidity"),
+                     "description": desc, "icon": emoji(desc)})
+    return days
 
-    forecast_lines = []
-    for day, (_, item) in list(daily.items())[:5]:
-        item_main = item.get("main", {})
-        item_weather = (item.get("weather") or [{}])[0]
-        forecast_lines.append(
-            f"{day}: {item_main.get('temp', 'N/A')} °C — "
-            f"{item_weather.get('description', 'N/A').capitalize()} "
-            f"(humidity {item_main.get('humidity', 'N/A')}%)"
-        )
-    return "\\n".join(current_lines), "\\n".join(forecast_lines) or "Forecast data is unavailable."
+def metric(label, value, symbol):
+    st.markdown(f'<div class="metric"><div class="metric-label">{symbol} &nbsp;{label}</div><div class="metric-value">{value}</div></div>', unsafe_allow_html=True)
 
+st.markdown('<div class="hero"><div class="eyebrow">Live conditions · Forecast · OpenWeather</div><div class="hero-title">Weather, made clear. 🌦️</div><div class="hero-sub">Real-time weather details for the places that matter to you.</div></div>', unsafe_allow_html=True)
+with st.form("weather_search"):
+    c1, c2 = st.columns([5, 1])
+    with c1:
+        city = st.text_input("Search a city or location", value=st.session_state.get("last_city", "Mumbai"), placeholder="Mumbai, London, New York")
+    with c2:
+        st.markdown("<div style='height:1.72rem'></div>", unsafe_allow_html=True)
+        submitted = st.form_submit_button("🔎 Search", use_container_width=True)
+if submitted:
+    st.session_state["last_city"] = city.strip()
 
-class WeatherApp:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        root.title("Live Weather — OpenWeather")
-        root.geometry("700x650")
-        root.minsize(560, 520)
-        root.configure(bg="#f3f6fb")
-
-        title = tk.Label(root, text="Live Weather", font=("Arial", 24, "bold"),
-                         bg="#f3f6fb", fg="#172554")
-        title.pack(pady=(20, 4))
-        subtitle = tk.Label(root, text="Search any city or location for current weather and forecast",
-                            font=("Arial", 10), bg="#f3f6fb", fg="#475569")
-        subtitle.pack(pady=(0, 16))
-
-        search_frame = tk.Frame(root, bg="#f3f6fb")
-        search_frame.pack(fill="x", padx=24)
-        self.city_entry = tk.Entry(search_frame, font=("Arial", 13), relief="solid", bd=1)
-        self.city_entry.pack(side="left", fill="x", expand=True, ipady=9, padx=(0, 10))
-        self.city_entry.insert(0, "Mumbai")
-        self.search_button = tk.Button(search_frame, text="Search", command=self.search,
-                                       font=("Arial", 11, "bold"), bg="#2563eb", fg="white",
-                                       activebackground="#1d4ed8", activeforeground="white",
-                                       relief="flat", padx=18, pady=8, cursor="hand2")
-        self.search_button.pack(side="right")
-        self.city_entry.bind("<Return>", lambda _event: self.search())
-
-        self.status = tk.Label(root, text="Enter a location and press Search.",
-                               bg="#f3f6fb", fg="#64748b", anchor="w")
-        self.status.pack(fill="x", padx=26, pady=(10, 4))
-
-        self.current_box = tk.LabelFrame(root, text="Current conditions", font=("Arial", 11, "bold"),
-                                         bg="white", fg="#172554", padx=14, pady=10)
-        self.current_box.pack(fill="x", padx=24, pady=8)
-        self.current_text = tk.Label(self.current_box, text="Weather details will appear here.",
-                                     justify="left", anchor="w", bg="white", fg="#0f172a",
-                                     font=("Arial", 12), wraplength=620)
-        self.current_text.pack(fill="x")
-
-        self.forecast_box = tk.LabelFrame(root, text="Forecast (up to 5 days)", font=("Arial", 11, "bold"),
-                                          bg="white", fg="#172554", padx=14, pady=10)
-        self.forecast_box.pack(fill="both", expand=True, padx=24, pady=(4, 16))
-        self.forecast_text = tk.Label(self.forecast_box, text="Forecast will appear after a search.",
-                                      justify="left", anchor="nw", bg="white", fg="#0f172a",
-                                      font=("Arial", 11), wraplength=620)
-        self.forecast_text.pack(fill="both", expand=True)
-
-        self.root.after(300, self.search)
-
-    def search(self):
-        city = self.city_entry.get().strip()
-        if not city:
-            messagebox.showwarning("Missing location", "Please type a city or location first.")
-            return
-        self.search_button.configure(state="disabled", text="Loading…")
-        self.status.configure(text=f"Fetching live weather for {city}…", fg="#475569")
-        self.root.update_idletasks()
+key = api_key()
+if not key:
+    st.warning("Add your OpenWeather API key to enable live weather searches.")
+    st.markdown("Get a key at [OpenWeather API](https://openweathermap.org/api). For Streamlit Cloud, open **App settings → Secrets** and add:")
+    st.code('OPENWEATHER_API_KEY = "paste_your_key_here"', language="toml")
+else:
+    selected = st.session_state.get("last_city", city).strip()
+    if not selected:
+        st.info("Enter a city or location to search.")
+    else:
         try:
-            data = fetch_weather(city)
-            current, forecast = format_results(data)
-            self.current_text.configure(text=current)
-            self.forecast_text.configure(text=forecast)
-            self.status.configure(text="Updated with live OpenWeather data.", fg="#15803d")
+            with st.spinner(f"Fetching live weather for {selected}..."):
+                data = fetch_weather(selected, key)
+            current = data["current"]
+            main = current.get("main", {})
+            sys_data = current.get("sys", {})
+            desc = (current.get("weather") or [{}])[0].get("description", "Unavailable")
+            place = current.get("name", selected)
+            country = sys_data.get("country", "")
+            place = f"{place}, {country}" if country else place
+            wind = current.get("wind", {}).get("speed")
+            wind = f"{wind * 3.6:.1f} km/h" if isinstance(wind, (int, float)) else "N/A"
+
+            left, right = st.columns([1.2, 1])
+            with left:
+                st.markdown(f"""<div class="weather-card"><div class="city">📍 {place}</div><div class="muted">Current weather</div><div style="display:flex;align-items:center;gap:1rem;margin-top:.9rem"><div style="font-size:4rem">{emoji(desc)}</div><div><div class="temperature">{round(main.get('temp', 0))}°C</div><div class="condition">{desc}</div></div></div><div class="muted" style="margin-top:.7rem">Feels like {round(main.get('feels_like', 0))}°C</div></div>""", unsafe_allow_html=True)
+            with right:
+                st.markdown('<div class="section-title" style="margin-top:0">Weather details</div>', unsafe_allow_html=True)
+                a, b = st.columns(2)
+                with a: metric("Humidity", f"{main.get('humidity', 'N/A')}%", "💧")
+                with b: metric("Wind speed", wind, "💨")
+                a, b = st.columns(2)
+                with a: metric("Pressure", f"{main.get('pressure', 'N/A')} hPa", "🧭")
+                with b:
+                    visibility = current.get("visibility")
+                    metric("Visibility", f"{visibility / 1000:.1f} km" if isinstance(visibility, (int, float)) else "N/A", "👁️")
+
+            st.markdown('<div class="section-title">📅 5-day forecast</div>', unsafe_allow_html=True)
+            days = daily_forecast(data["forecast"])
+            if days:
+                cols = st.columns(len(days))
+                for col, day in zip(cols, days):
+                    temp = round(day["temp"]) if isinstance(day["temp"], (int, float)) else "—"
+                    with col:
+                        st.markdown(f"""<div class="forecast-card"><div class="forecast-day">{day['day']}</div><div class="muted">{day['date']}</div><div class="forecast-icon">{day['icon']}</div><div class="forecast-temp">{temp}°C</div><div class="forecast-desc">{day['description']}</div><div class="muted" style="font-size:.8rem">💧 {day['humidity']}%</div></div>""", unsafe_allow_html=True)
+            else:
+                st.info("Forecast data is not available.")
+            st.caption("Forecast uses the 3-hour interval nearest midday for each date; values are not daily high/low predictions.")
         except (ValueError, RuntimeError) as exc:
-            self.status.configure(text="Could not load weather.", fg="#b91c1c")
-            messagebox.showerror("Weather lookup failed", str(exc))
-        finally:
-            self.search_button.configure(state="normal", text="Search")
+            st.error(str(exc))
+        except Exception:
+            st.error("Something unexpected happened. Check the location and try again.")
 
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = WeatherApp(root)
-    root.mainloop()
+st.markdown('<div class="footer">Built with Python & Streamlit · Weather data by OpenWeather · Keep your API key private</div>', unsafe_allow_html=True)
